@@ -55,6 +55,33 @@ app.use(cors());
 app.use(fileUpload());
 app.use(bodyParser.raw({ type: 'application/octet-stream', limit: '10mb' }));
 
+app.use(async (req, res, next) => {
+  const t1 = new Date().getTime();
+
+  // const resJson = res.json;
+  // res.json = function newResJson(...body) {
+  //   // eslint-disable-next-line no-underscore-dangle
+  //   res.locals._body = body[0];
+  //   return resJson.apply(this, ...body);
+  // };
+
+  res.on('finish', function() {
+    const t2 = new Date().getTime();
+    const dt = t2 - t1;
+    const print = [req.method, req.originalUrl, `${dt}ms`];
+
+    const dirs = req.originalUrl
+      .split('/')
+      .filter(part => part && part !== 'api');
+
+    console.log(dirs);
+
+    console.log(...print);
+  });
+
+  next();
+});
+
 //
 // Authentication
 // -----------------------------------------------------------------------------
