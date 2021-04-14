@@ -2,6 +2,8 @@ import fs from 'fs';
 import moment from 'moment';
 
 export function log(func, query, benchmark) {
+  console.log(`${benchmark}ms`, query);
+
   let folder = './events/dblog/';
   if (process.env.NODE_ENV === 'production') {
     folder = '../events/dblog/';

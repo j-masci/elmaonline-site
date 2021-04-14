@@ -1,8 +1,11 @@
 import express from 'express';
 import sequelize from 'sequelize';
+import seq from 'data/sequelize';
 import { authContext } from 'utils/auth';
-import { has } from 'lodash';
-import { Level, Time } from '../data/models';
+import { has, values, groupBy } from 'lodash';
+import { aggregate } from '../data/models/LevelStats';
+
+import { Level, Time, Besttime, LevelStats } from '../data/models';
 
 const router = express.Router();
 
@@ -19,6 +22,42 @@ const attributes = [
   'Hidden',
   'Legacy',
 ];
+
+const recent = async count => {
+  const [levs] = await seq.query(
+    'SELECT * FROM time ORDER BY TimeIndex DESC LIMIT 0, ?',
+    {
+      replacements: [count],
+    },
+  );
+
+  const indexes = values(groupBy(levs, l => l.LevelIndex))
+    .map(lvs => lvs[0])
+    .map(lev => lev.LevelIndex);
+
+  return indexes;
+};
+
+router.get('/temp', async (req, res) => {
+  const r = {};
+
+  const LevelIndex = 5;
+
+  const times = await Time.findAll({
+    where: {
+      LevelIndex,
+      Finished: ['E', 'D', 'F'],
+    },
+    order: ['time', 'asc'],
+    // limit: 100,
+  });
+
+  r.agg = aggregate(times);
+  r.LevelIndex = LevelIndex;
+  r.count = times.length;
+
+  res.json(r);
+});
 
 const getLevel = async LevelIndex => {
   const level = await Level.findOne({
