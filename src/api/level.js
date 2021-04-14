@@ -1,7 +1,6 @@
 import express from 'express';
 import sequelize from 'sequelize';
 import { authContext } from 'utils/auth';
-import { has } from 'lodash';
 import { Level, Time } from '../data/models';
 
 const router = express.Router();

@@ -48,6 +48,9 @@ app.use(express.static(path.resolve(__dirname, 'public')));
 app.use(cookieParser());
 app.use(bodyParser.urlencoded({ extended: true }));
 app.use(bodyParser.json());
+if (process.env.NODE_ENV === 'development') {
+  app.set('json spaces', 2);
+}
 app.use(cors());
 app.use(fileUpload());
 app.use(bodyParser.raw({ type: 'application/octet-stream', limit: '10mb' }));
