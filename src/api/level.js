@@ -41,20 +41,19 @@ const recent = async count => {
 router.get('/temp', async (req, res) => {
   const r = {};
 
-  const LevelIndex = 5;
+  const [levs] = await seq.query(
+    'SELECT * FROM time WHERE FINISHED IN ("F", "E", "D") ORDER BY TimeIndex ASC LIMIT 0, 100000',
+  );
 
-  const times = await Time.findAll({
-    where: {
-      LevelIndex,
-      Finished: ['E', 'D', 'F'],
-    },
-    order: ['time', 'asc'],
-    // limit: 100,
-  });
+  const idk = values(groupBy(levs, 'LevelIndex'));
 
-  r.agg = aggregate(times);
-  r.LevelIndex = LevelIndex;
-  r.count = times.length;
+  const aggs = idk.map(levels => ({
+    levelIndex: levels[0].LevelIndex,
+    aggs: aggregate(levels),
+  }));
+
+  r.countLevs = aggs.length;
+  r.aggs = aggs;
 
   res.json(r);
 });
