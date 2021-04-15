@@ -2,7 +2,6 @@ import sequelize from '../sequelize';
 import Battle from './Battle'; // add the data model here to import
 import Replay from './Replay';
 import Level from './Level';
-import LevelStats from './LevelStats';
 import Kuski from './Kuski';
 import Battletime from './Battletime';
 import Chat from './Chat';
@@ -47,6 +46,9 @@ import LevelPackCollection from './LevelPackCollection';
 import LevelPackCollectionPack from './LevelPackCollectionPack';
 import Tag from './Tag';
 import ReplayTags from './ReplayTags';
+import LevelStats from './LevelStats';
+import KuskiStats from './KuskiStats';
+import PlayStats from './PlayStats';
 
 Replay.belongsTo(Kuski, {
   foreignKey: 'DrivenBy',
@@ -146,6 +148,16 @@ Level.hasOne(LevelStats, {
 LevelStats.belongsTo(Level, {
   foreignKey: 'LevelIndex',
   as: 'Level',
+});
+
+Kuski.hasOne(KuskiStats, {
+  foreignKey: 'KuskiIndex',
+  as: 'KuskiStats',
+});
+
+KuskiStats.belongsTo(Kuski, {
+  foreignKey: 'KuskiIndex',
+  as: 'Kuski',
 });
 
 LevelPack.hasMany(LevelPackLevel, {
@@ -399,7 +411,6 @@ export {
   Battle,
   Replay,
   Level,
-  LevelStats,
   Kuski,
   Battletime,
   Chat,
@@ -443,4 +454,7 @@ export {
   LevelPackCollection,
   LevelPackCollectionPack,
   Tag,
+  LevelStats,
+  KuskiStats,
+  PlayStats,
 }; // add the data model here as well so it exports

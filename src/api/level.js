@@ -2,10 +2,8 @@ import express from 'express';
 import sequelize from 'sequelize';
 import seq from 'data/sequelize';
 import { authContext } from 'utils/auth';
-import { has, values, groupBy } from 'lodash';
-import { aggregate } from '../data/models/LevelStats';
-
-import { Level, Time, Besttime, LevelStats } from '../data/models';
+import { mapValues, has, values, groupBy } from 'lodash';
+import { Level, Time, Besttime, LevelStats, PlayStats } from '../data/models';
 
 const router = express.Router();
 
@@ -23,37 +21,48 @@ const attributes = [
   'Legacy',
 ];
 
-const recent = async count => {
-  const [levs] = await seq.query(
-    'SELECT * FROM time ORDER BY TimeIndex DESC LIMIT 0, ?',
-    {
-      replacements: [count],
-    },
-  );
-
-  const indexes = values(groupBy(levs, l => l.LevelIndex))
-    .map(lvs => lvs[0])
-    .map(lev => lev.LevelIndex);
-
-  return indexes;
-};
-
 router.get('/temp', async (req, res) => {
   const r = {};
 
   const [levs] = await seq.query(
-    'SELECT * FROM time WHERE FINISHED IN ("F", "E", "D") ORDER BY TimeIndex ASC LIMIT 0, 100000',
+    'SELECT * FROM time WHERE FINISHED IN ("F", "E", "D") ORDER BY TimeIndex ASC LIMIT 0, 10000',
   );
 
   const idk = values(groupBy(levs, 'LevelIndex'));
 
-  const aggs = idk.map(levels => ({
-    levelIndex: levels[0].LevelIndex,
-    aggs: aggregate(levels),
-  }));
+  const aggs = idk.map(levels => PlayStats.aggregateTimes(levels)[0]);
 
   r.countLevs = aggs.length;
   r.aggs = aggs;
+
+  console.log('start');
+
+  const strategies = LevelStats.getMergeStrategies();
+
+  await Promise.all(
+    aggs.map(async a => {
+      const prev = await LevelStats.findOne({
+        where: {
+          LevelIndex: a.LevelIndex,
+        },
+      });
+
+      const toUpdate = PlayStats.merge(a, prev || {}, strategies);
+
+      if (prev) {
+        // should be redundant
+        delete toUpdate.LevelIndex;
+
+        const updated = await prev.update(toUpdate);
+        console.log('updated', updated ? 1 : 0);
+      } else {
+        const inserted = await LevelStats.create(toUpdate);
+        console.log('inserted', inserted ? 1 : 0);
+      }
+    }),
+  );
+
+  console.log('done');
 
   res.json(r);
 });
