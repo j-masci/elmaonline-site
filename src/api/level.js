@@ -3,7 +3,14 @@ import sequelize from 'sequelize';
 import seq from 'data/sequelize';
 import { authContext } from 'utils/auth';
 import { mapValues, has, values, groupBy } from 'lodash';
-import { Level, Time, Besttime, LevelStats, PlayStats } from '../data/models';
+import {
+  Level,
+  Time,
+  Besttime,
+  LevelStats,
+  KuskiStats,
+  PlayStats,
+} from '../data/models';
 
 const router = express.Router();
 
@@ -22,15 +29,19 @@ const attributes = [
 ];
 
 router.get('/temp', async (req, res) => {
-  const r = {};
+  const r = {
+    updates: [],
+  };
 
   const [levs] = await seq.query(
     'SELECT * FROM time WHERE FINISHED IN ("F", "E", "D") ORDER BY TimeIndex ASC LIMIT 0, 10000',
   );
 
-  const idk = values(groupBy(levs, 'LevelIndex'));
+  const levelsTimes = groupBy(levs, 'LevelIndex');
 
-  const aggs = idk.map(levels => PlayStats.aggregateTimes(levels)[0]);
+  const aggs = mapValues(levelsTimes, (times, levelIndex) => {
+    return PlayStats.aggregateTimes(times);
+  });
 
   r.countLevs = aggs.length;
   r.aggs = aggs;
@@ -40,14 +51,16 @@ router.get('/temp', async (req, res) => {
   const strategies = LevelStats.getMergeStrategies();
 
   await Promise.all(
-    aggs.map(async a => {
+    values(aggs).map(async a => {
       const prev = await LevelStats.findOne({
         where: {
           LevelIndex: a.LevelIndex,
         },
       });
 
-      const toUpdate = PlayStats.merge(a, prev || {}, strategies);
+      const toUpdate = PlayStats.addAggregates(a, prev || {}, strategies);
+
+      r.updates.push(toUpdate);
 
       if (prev) {
         // should be redundant

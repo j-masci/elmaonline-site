@@ -48,7 +48,7 @@ import Tag from './Tag';
 import ReplayTags from './ReplayTags';
 import LevelStats from './LevelStats';
 import KuskiStats from './KuskiStats';
-import PlayStats from './PlayStats';
+import * as PlayStats from './PlayStats';
 
 Replay.belongsTo(Kuski, {
   foreignKey: 'DrivenBy',

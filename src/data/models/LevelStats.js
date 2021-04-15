@@ -37,7 +37,7 @@ export const ddl = {
 };
 
 class LevelStats extends Model {
-  getMergeStrategies = () => {
+  static getMergeStrategies = () => {
     return {
       LevelIndex: aggs => aggs.LevelIndex,
       ...getCommonMergeStrategies(),

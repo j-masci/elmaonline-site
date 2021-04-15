@@ -19,7 +19,7 @@ export const ddl = {
 };
 
 class KuskiStats extends Model {
-  getMergeStrategies = () => {
+  static getMergeStrategies = () => {
     return {
       // needed for insert but not update
       KuskiIndex: aggs => aggs.KuskiIndex,

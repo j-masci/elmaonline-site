@@ -1,6 +1,7 @@
 // a playStats module which holds common functionality used in both LevelStats and KuskiStats models.
 import { mapValues } from 'lodash';
 import Sequelize from 'sequelize';
+import { sumBy, maxBy } from 'lodash';
 
 const timeCol = () => {
   // need bigger int?
@@ -74,6 +75,7 @@ const getMaxFunc = index => (aggs, prev) =>
 // use LevelStats/KuskiStats.getMergeStragegies, not this.
 export const getCommonMergeStrategies = () => {
   return {
+    // SUM
     TimeF: 'sum',
     TimeD: 'sum',
     TimeE: 'sum',
@@ -86,6 +88,37 @@ export const getCommonMergeStrategies = () => {
     ApplesD: 'sum',
     ApplesE: 'sum',
     ApplesAll: 'sum',
+    ThrottleTimeF: 'sum',
+    ThrottleTimeD: 'sum',
+    ThrottleTimeE: 'sum',
+    ThrottleTimeAll: 'sum',
+    BrakeTimeF: 'sum',
+    BrakeTimeD: 'sum',
+    BrakeTimeE: 'sum',
+    BrakeTimeAll: 'sum',
+    LeftVoltF: 'sum',
+    LeftVoltD: 'sum',
+    LeftVoltE: 'sum',
+    LeftVoltAll: 'sum',
+    RightVoltF: 'sum',
+    RightVoltD: 'sum',
+    RightVoltE: 'sum',
+    RightVoltAll: 'sum',
+    SuperVoltF: 'sum',
+    SuperVoltD: 'sum',
+    SuperVoltE: 'sum',
+    SuperVoltAll: 'sum',
+    TurnF: 'sum',
+    TurnD: 'sum',
+    TurnE: 'sum',
+    TurnAll: 'sum',
+
+    // MAX
+    MaxSpeedF: 'max',
+    MaxSpeedD: 'max',
+    MaxSpeedE: 'max',
+    MaxSpeedAll: 'max',
+
     // BattleTopTime: 'min',
     // BattleTopKuski: (aggs, prev) => {
     //   if (aggs.BattleTopTime < prev.BattleTopTime) {
@@ -100,10 +133,6 @@ export const getCommonMergeStrategies = () => {
     // Kuski2Time: null,
     // Kuski3Index: null,
     // Kuski3Time: null,
-    MaxSpeedF: 'max',
-    MaxSpeedD: 'max',
-    MaxSpeedE: 'max',
-    MaxSpeedAll: 'max',
   };
 };
 
@@ -133,7 +162,7 @@ const transformMergeStrategies = strats => {
 
 // merge an array of aggregate times with an existing row in the database
 // or an empty object.
-export const merge = (aggs, prev = {}, strategies) => {
+export const addAggregates = (aggs, prev = {}, strategies) => {
   const strats = transformMergeStrategies(strategies);
 
   return mapValues(strats, func => {
@@ -141,25 +170,95 @@ export const merge = (aggs, prev = {}, strategies) => {
   });
 };
 
-// aggregate an array of rows from the times table.
-// the input times may or may not have the same kuski or level index.
+// helps to ensure that columns ending with All are the sum of
+// related cols ending with E, F, D
+const timeFinishedAll = t => ['E', 'F', 'D'].indexOf(t.Finished) !== -1;
+
+// col is an iteratee as passed to lodash functions
+// does lodash already provide this function ?
+const getter = (obj, key) => {
+  if (typeof key === 'function') {
+    return key(obj);
+  }
+
+  return obj[key];
+};
+
+// ie. "TimeF", "TimeE", "TimeD", "TimeAll"
+const sumGroup = (times, base, col) => {
+  // eslint-disable-next-line no-param-reassign
+  col = col || base;
+  return {
+    [`${base}F`]: sumBy(times, time =>
+      time.Finished === 'F' ? getter(time, col) : 0,
+    ),
+    [`${base}E`]: sumBy(times, time =>
+      time.Finished === 'E' ? getter(time, col) : 0,
+    ),
+    [`${base}D`]: sumBy(times, time =>
+      time.Finished === 'D' ? getter(time, col) : 0,
+    ),
+    [`${base}All`]: sumBy(times, time =>
+      timeFinishedAll(time) ? getter(time, col) : 0,
+    ),
+  };
+};
+
+// ie. MaxSpeed
+const maxGroup = (times, base, col) => {
+  // eslint-disable-next-line no-param-reassign
+  col = col || base;
+
+  // because maxBy returns the entire object
+  // eslint-disable-next-line no-underscore-dangle
+  const _maxBy = iteratee => {
+    return getter(maxBy(times, iteratee), iteratee);
+  };
+
+  return {
+    [`${base}F`]: _maxBy(time =>
+      time.Finished === 'F' ? getter(time, col) : 0,
+    ),
+    [`${base}E`]: _maxBy(time =>
+      time.Finished === 'E' ? getter(time, col) : 0,
+    ),
+    [`${base}D`]: _maxBy(time =>
+      time.Finished === 'D' ? getter(time, col) : 0,
+    ),
+    [`${base}All`]: _maxBy(time =>
+      timeFinishedAll(time) ? getter(time, col) : 0,
+    ),
+  };
+};
+
+// aggregate a record set from the time table.
+// its likely but not necessary that all records passed in
+// share the same KuskiIndex or LevelIndex.
 export const aggregateTimes = times => {
-  const ret = {
-    // useful if/when all times have the same level/kuski
+  return {
+    Count: times.length,
+    First: times[0],
     LevelIndex: times.length && times[0].LevelIndex,
     KuskiIndex: times.length && times[0].KuskiIndex,
-    TimeF: 0,
-    TimeD: 0,
-    TimeE: 0,
-    TimeAll: 0,
-    AttemptsF: 0,
-    AttemptsD: 0,
-    AttemptsE: 0,
-    AttemptsAll: 0,
-    ApplesF: 0,
-    ApplesD: 0,
-    ApplesE: 0,
-    ApplesAll: 0,
+
+    // SUM
+    ...sumGroup(times, 'Time'),
+    ...sumGroup(times, 'Apples'),
+    ...sumGroup(times, 'ThrottleTime'),
+    ...sumGroup(times, 'BrakeTime'),
+    ...sumGroup(times, 'LeftVolt'),
+    ...sumGroup(times, 'RightVolt'),
+    ...sumGroup(times, 'SuperVolt'),
+    ...sumGroup(times, 'Turn'),
+
+    AttemptsF: sumBy(times, t => (t.Finished === 'F' ? 1 : 0)),
+    AttemptsE: sumBy(times, t => (t.Finished === 'E' ? 1 : 0)),
+    AttemptsD: sumBy(times, t => (t.Finished === 'D' ? 1 : 0)),
+    AttemptsAll: sumBy(times, t => (timeFinishedAll(t) ? 1 : 0)),
+
+    // MAX
+    ...maxGroup(times, 'MaxSpeed'),
+
     BattleTopTime: null,
     BattleTopKuski: null,
     LeadersCount: 0,
@@ -169,38 +268,5 @@ export const aggregateTimes = times => {
     Kuski2Time: null,
     Kuski3Index: null,
     Kuski3Time: null,
-    MaxSpeedF: 0,
-    MaxSpeedD: 0,
-    MaxSpeedE: 0,
-    MaxSpeedAll: 0,
   };
-
-  times.forEach(t => {
-    if (['F', 'D', 'E'].indexOf(t.Finished) > -1) {
-      ret.TimeAll += t.Time;
-      ret.AttemptsAll += 1;
-      ret.ApplesAll += t.Apples;
-
-      ret.MaxSpeedAll = Math.max(ret.MaxSpeedAll, t.MaxSpeed);
-    }
-
-    if (t.Finished === 'F') {
-      ret.TimeF += t.Time;
-      ret.AttemptsF += 1;
-      ret.ApplesF += t.Apples;
-      ret.MaxSpeedF = Math.max(ret.MaxSpeedF, t.MaxSpeed);
-    } else if (t.Finished === 'D') {
-      ret.TimeD += t.Time;
-      ret.AttemptsD += 1;
-      ret.ApplesD += t.Apples;
-      ret.MaxSpeedD = Math.max(ret.MaxSpeedD, t.MaxSpeed);
-    } else if (t.Finished === 'E') {
-      ret.TimeE += t.Time;
-      ret.AttemptsE += 1;
-      ret.ApplesE += t.Apples;
-      ret.MaxSpeedE = Math.max(ret.MaxSpeedE, t.MaxSpeed);
-    }
-  });
-
-  return ret;
 };
