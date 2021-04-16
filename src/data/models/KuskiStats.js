@@ -11,9 +11,7 @@ export const ddl = {
   },
   KuskiIndex: {
     type: Sequelize.INTEGER,
-    allowNull: false,
-    defaultValue: 0,
-    foreignKey: true,
+    allowNull: true,
   },
   ...getCommonCols(),
 };
@@ -31,7 +29,10 @@ class KuskiStats extends Model {
 KuskiStats.init(ddl, {
   sequelize: sequelizeInstance,
   tableName: 'kuskiStats_dev1',
-  indexes: [{ fields: ['KuskiStatsIndex', 'KuskiIndex'] }],
+  indexes: [
+    { unique: true, fields: ['KuskiIndex'] },
+    { fields: ['KuskiStatsIndex', 'KuskiIndex'] },
+  ],
 });
 
 export default KuskiStats;

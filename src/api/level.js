@@ -3,6 +3,7 @@ import sequelize from 'sequelize';
 import seq from 'data/sequelize';
 import { authContext } from 'utils/auth';
 import { mapValues, has, values, groupBy } from 'lodash';
+import * as assert from 'assert';
 import {
   Level,
   Time,
@@ -29,53 +30,83 @@ const attributes = [
 ];
 
 router.get('/temp', async (req, res) => {
-  const r = {
-    updates: [],
-  };
+  const r = {};
 
   const [levs] = await seq.query(
-    'SELECT * FROM time WHERE FINISHED IN ("F", "E", "D") ORDER BY TimeIndex ASC LIMIT 0, 10000',
+    'SELECT * FROM time WHERE FINISHED IN ("F", "E", "D") ORDER BY TimeIndex DESC LIMIT 0, 100000',
   );
 
   const levelsTimes = groupBy(levs, 'LevelIndex');
 
-  const aggs = mapValues(levelsTimes, (times, levelIndex) => {
+  // level indexes mapped to aggregate objects
+  const aggregates = mapValues(levelsTimes, (times, levelIndex) => {
     return PlayStats.aggregateTimes(times);
   });
 
-  r.countLevs = aggs.length;
-  r.aggs = aggs;
+  // all level indexes mapped to existing LevelStats objects or null
+  const exLevelStats = mapValues(aggregates, null);
 
-  console.log('start');
+  const [ex, nonExIds] = await LevelStats.findFromLevelIndexes(
+    Object.keys(exLevelStats),
+  );
+
+  r.countLevs = Object.keys(aggregates).length;
+  r.nonExIdsCount = nonExIds.length;
+  r.exCount = ex.length;
+  r.IDs = Object.keys(aggregates);
+  r.nonExIds = nonExIds;
+  r.ex = ex;
+
+  // const toInsert = exLevelStats;
+  // const toUpdate = {};
+  r.aggs = aggregates;
 
   const strategies = LevelStats.getMergeStrategies();
 
-  await Promise.all(
-    values(aggs).map(async a => {
-      const prev = await LevelStats.findOne({
-        where: {
-          LevelIndex: a.LevelIndex,
-        },
-      });
+  const updates = ex.map(stats => {
+    const thisLevelsAggregates = aggregates[stats.LevelIndex];
 
-      const toUpdate = PlayStats.addAggregates(a, prev || {}, strategies);
+    assert(thisLevelsAggregates !== undefined);
 
-      r.updates.push(toUpdate);
+    const ret = PlayStats.addAggregates(
+      thisLevelsAggregates,
+      stats,
+      strategies,
+    );
+    // ensure insert triggers updateOnDuplicate
+    ret.LevelStatsIndex = stats.LevelStatsIndex;
+    return ret;
+  });
 
-      if (prev) {
-        // should be redundant
-        delete toUpdate.LevelIndex;
+  const inserts = nonExIds.map(id => {
+    const thisLevelsAggregates = aggregates[id];
 
-        const updated = await prev.update(toUpdate);
-        console.log('updated', updated ? 1 : 0);
-      } else {
-        const inserted = await LevelStats.create(toUpdate);
-        console.log('inserted', inserted ? 1 : 0);
-      }
-    }),
+    assert(thisLevelsAggregates !== undefined);
+
+    return PlayStats.addAggregates(thisLevelsAggregates, {}, strategies);
+  });
+
+  console.log(42, updates.length);
+  console.log(43, inserts.length);
+
+  r.updates = updates;
+  r.inserts = inserts;
+
+  const updateOnDuplicateKeys = Object.keys(strategies).filter(
+    key => ['LevelStatsIndex', 'LevelIndex'].indexOf(key) === -1,
   );
 
-  console.log('done');
+  r.updateOnDuplicateKeys = updateOnDuplicateKeys;
+
+  console.log('UPDATE');
+
+  const updateResult = await LevelStats.bulkCreate(updates, {
+    updateOnDuplicate: updateOnDuplicateKeys,
+  });
+
+  console.log('INSERT');
+
+  const insertResult = await LevelStats.bulkCreate(inserts, {});
 
   res.json(r);
 });

@@ -143,21 +143,25 @@ Level.hasMany(Battle, {
 Level.hasOne(LevelStats, {
   foreignKey: 'LevelIndex',
   as: 'LevelStats',
+  constraints: false,
 });
 
 LevelStats.belongsTo(Level, {
   foreignKey: 'LevelIndex',
   as: 'Level',
+  constraints: false,
 });
 
 Kuski.hasOne(KuskiStats, {
   foreignKey: 'KuskiIndex',
   as: 'KuskiStats',
+  constraints: false,
 });
 
 KuskiStats.belongsTo(Kuski, {
   foreignKey: 'KuskiIndex',
   as: 'Kuski',
+  constraints: false,
 });
 
 LevelPack.hasMany(LevelPackLevel, {

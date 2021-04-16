@@ -11,9 +11,7 @@ export const ddl = {
   },
   LevelIndex: {
     type: Sequelize.INTEGER,
-    allowNull: false,
-    defaultValue: 0,
-    foreignKey: true,
+    allowNull: true,
   },
   ...getCommonCols(),
   // BattleTopTime: timeCol(),
@@ -43,12 +41,34 @@ class LevelStats extends Model {
       ...getCommonMergeStrategies(),
     };
   };
+
+  // returns an array of levelStats objects, and an array of level IDs for
+  // which no levelStats entry exists.
+  static findFromLevelIndexes = async indexes => {
+    // eslint-disable-next-line no-param-reassign
+    indexes = indexes.map(i => +i);
+
+    const ex = await LevelStats.findAll({
+      where: {
+        LevelIndex: indexes,
+      },
+    });
+
+    const exIds = ex.map(row => +row.LevelIndex);
+
+    const nonExIds = indexes.filter(id => exIds.indexOf(+id) === -1);
+
+    return [ex, nonExIds];
+  };
 }
 
 LevelStats.init(ddl, {
   sequelize: sequelizeInstance,
-  tableName: 'levelStats_dev3',
-  indexes: [{ fields: ['LevelStatsIndex', 'LevelIndex'] }],
+  tableName: 'levelStats_dev5',
+  indexes: [
+    { unique: true, fields: ['LevelIndex'] },
+    { fields: ['LevelStatsIndex', 'LevelIndex'] },
+  ],
 });
 
 export default LevelStats;
