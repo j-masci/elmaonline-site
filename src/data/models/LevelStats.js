@@ -1,6 +1,11 @@
 import Sequelize, { Model } from 'sequelize';
-import { getCommonCols, getCommonMergeStrategies } from './PlayStats';
+import * as _ from 'lodash';
+import { strict as assert } from 'assert';
+import * as Ps from './PlayStats';
 import sequelizeInstance from '../sequelize';
+
+// store this many top times.
+const topXTimes = 10;
 
 export const ddl = {
   LevelStatsIndex: {
@@ -13,58 +18,113 @@ export const ddl = {
     type: Sequelize.INTEGER,
     allowNull: true,
   },
-  ...getCommonCols(),
+  ...Ps.getCommonCols(),
+  // ie. '2020-06-25 19:05:59',
+  LastDriven: {
+    type: Sequelize.STRING(19),
+    allowNull: true,
+  },
   // BattleTopTime: timeCol(),
   // BattleTopKuski: timeCol(),
-  // Top X kuskis/times, Kuski1Index, Kuski1Time, etc.
-  // ...(() => {
-  //   const top = {};
-  //
-  //   for (let i = 1; i <= 3; i++) {
-  //     top[`Kuski${i}Index`] = {
-  //       type: DataType.INTEGER,
-  //       allowNull: true,
-  //       defaultValue: 0,
-  //     };
-  //
-  //     top[`Kuski${i}Time`] = timeCol();
-  //   }
-  //
-  //   return top;
-  // })(),
+  // KuskiIndex0, KuskiTime0, KuskiIndex1, KuskiTime1, etc.
+  ...(() => {
+    const ret = {};
+
+    // 0 to 9
+    _.range(0, topXTimes).forEach(i => {
+      ret[`KuskiIndex${i}`] = {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+      };
+
+      ret[`KuskiTime${i}`] = {
+        type: Sequelize.INTEGER,
+        allowNull: true,
+      };
+    });
+
+    return ret;
+  })(),
 };
 
 class LevelStats extends Model {
-  static getMergeStrategies = () => {
-    return {
-      LevelIndex: aggs => aggs.LevelIndex,
-      ...getCommonMergeStrategies(),
-    };
+  // returns an array of objects representing the top times
+  // for the level. The size of the array is limited by the number
+  // of top times, which could be less than 10, and even 0.
+  getTopTimes = () => {
+    const ret = _.range(0, topXTimes).map(i => {
+      const Time = this.getDataValue(`KuskiTime${i}`);
+      const KuskiIndex = this.getDataValue(`KuskiIndex${i}`);
+
+      return Time && Time > 0
+        ? {
+            Time,
+            KuskiIndex,
+          }
+        : null;
+    });
+
+    return ret.filter(v => v !== null);
   };
 
-  // returns an array of levelStats objects, and an array of level IDs for
-  // which no levelStats entry exists.
-  static findFromLevelIndexes = async indexes => {
-    // eslint-disable-next-line no-param-reassign
-    indexes = indexes.map(i => +i);
+  static getColumns = () => {
+    return Object.keys(ddl);
+  };
 
-    const ex = await LevelStats.findAll({
+  // ie. add aggregates to an existing database row or null
+  static buildRecord = (aggs, prev) => {
+    // most columns
+    const record = Ps.buildCommonRecord(aggs, prev || {});
+
+    let exTopTimes;
+
+    if (prev !== null) {
+      record.LevelStatsIndex = prev.LevelStatsIndex;
+      assert(prev.LevelIndex === aggs.LevelIndex);
+      record.LevelIndex = aggs.LevelIndex;
+      exTopTimes = prev.getTopTimes();
+
+      if (aggs.LastDriven > prev.LastDriven) {
+        record.LastDriven = aggs.LastDriven;
+      }
+    } else {
+      exTopTimes = [];
+      record.LastDriven = aggs.LastDriven;
+      record.LevelIndex = aggs.LevelIndex;
+    }
+
+    const allTopTimes = exTopTimes.concat(aggs.topTimes);
+
+    const newTopTimes = _.sortBy(allTopTimes, 'Time').slice(0, topXTimes);
+
+    // Top X times
+    _.range(0, topXTimes).forEach(i => {
+      record[`KuskiIndex${i}`] = newTopTimes[i]
+        ? newTopTimes[i].KuskiIndex
+        : null;
+
+      record[`KuskiTime${i}`] = newTopTimes[i] ? newTopTimes[i].Time : null;
+    });
+
+    return record;
+  };
+
+  // map an array of ids to existing instances or null
+  // returns an object, indexed by ID.
+  static mapIds = async levelIds => {
+    const records = await LevelStats.findAll({
       where: {
-        LevelIndex: indexes,
+        LevelIndex: levelIds,
       },
     });
 
-    const exIds = ex.map(row => +row.LevelIndex);
-
-    const nonExIds = indexes.filter(id => exIds.indexOf(+id) === -1);
-
-    return [ex, nonExIds];
+    return Ps.mapIds(levelIds, records, 'LevelIndex');
   };
 }
 
 LevelStats.init(ddl, {
   sequelize: sequelizeInstance,
-  tableName: 'levelStats_dev5',
+  tableName: 'levelStats_dev6',
   indexes: [
     { unique: true, fields: ['LevelIndex'] },
     { fields: ['LevelStatsIndex', 'LevelIndex'] },

@@ -2,7 +2,20 @@ import fs from 'fs';
 import moment from 'moment';
 
 export function log(func, query, benchmark) {
-  console.log(`${benchmark}ms`, query);
+  const max = 1200;
+
+  console.log(3333333, query.length, max);
+  if (query.length > max) {
+    console.log(
+      func,
+      `${benchmark}ms`,
+      'Truncated to',
+      max,
+      query.substring(0, max),
+    );
+  } else {
+    console.log(func, `${benchmark}ms`, query);
+  }
 
   let folder = './events/dblog/';
   if (process.env.NODE_ENV === 'production') {

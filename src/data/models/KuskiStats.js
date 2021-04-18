@@ -1,6 +1,8 @@
 import Sequelize, { Model } from 'sequelize';
-import { getCommonCols, getCommonMergeStrategies } from './PlayStats';
+import * as Ps from './PlayStats';
 import sequelizeInstance from '../sequelize';
+
+// ** KUSKI STATS NOT CURRENTLY IMPLEMENTED YET **
 
 export const ddl = {
   KuskiStatsIndex: {
@@ -13,18 +15,10 @@ export const ddl = {
     type: Sequelize.INTEGER,
     allowNull: true,
   },
-  ...getCommonCols(),
+  ...Ps.getCommonCols(),
 };
 
-class KuskiStats extends Model {
-  static getMergeStrategies = () => {
-    return {
-      // needed for insert but not update
-      KuskiIndex: aggs => aggs.KuskiIndex,
-      ...getCommonMergeStrategies(),
-    };
-  };
-}
+class KuskiStats extends Model {}
 
 KuskiStats.init(ddl, {
   sequelize: sequelizeInstance,
