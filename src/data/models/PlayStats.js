@@ -1,7 +1,13 @@
 // a playStats module which holds common functionality used in both LevelStats and KuskiStats models.
 import Sequelize from 'sequelize';
+import sequelize from 'data/sequelize';
 import * as _ from 'lodash';
 import moment from 'moment';
+
+// times longer than this are can be treated as this
+// instead, to deter ppl from inflating playtime on their levels.
+// todo: not implemented yet.
+const maxTimeSingleRun = 360000;
 
 export const timeCol = () => {
   // INTEGER probably enough but i'm not willing to risk that i calculated
@@ -65,9 +71,18 @@ export const getCommonCols = () => ({
   TurnAll: attemptsCol(),
 });
 
-// build a record containing only common columns
-export const buildCommonRecord = (aggs, prev = {}) => {
-  // indexes are database columns
+/**
+ *
+ * @param aggs
+ * @param {LevelStats|null} prev
+ * @returns {{ThrottleTimeF: unknown, ThrottleTimeE: unknown, ThrottleTimeD: unknown, ApplesAll: unknown, MaxSpeedF: unknown, MaxSpeedE: unknown, MaxSpeedD: unknown, BrakeTimeF: unknown, TurnD: unknown, BrakeTimeE: unknown, RightVoltF: unknown, TimeAll: unknown, BrakeTimeD: unknown, RightVoltE: unknown, AttemptsE: unknown, AttemptsD: unknown, ThrottleTimeAll: unknown, BrakeTimeAll: unknown, ApplesD: unknown, ApplesE: unknown, RightVoltD: unknown, ApplesF: unknown, TurnE: unknown, TurnF: unknown, TimeD: unknown, TimeF: unknown, TimeE: unknown, AttemptsF: unknown, SuperVoltAll: unknown, LeftVoltAll: unknown, SuperVoltF: unknown, SuperVoltE: unknown, SuperVoltD: unknown, TurnAll: unknown, AttemptsAll: unknown, LeftVoltE: unknown, LeftVoltD: unknown, MaxSpeedAll: unknown, LeftVoltF: unknown, RightVoltAll: unknown}}
+ */
+export const buildCommonRecord = (aggs, prev) => {
+  // eslint-disable-next-line no-param-reassign
+  prev = prev || {};
+
+  // indexes are database columns.
+  // values can be functions which takes (aggs, prev || {})
   const cols = {
     // SUM
     TimeF: 'sum',
@@ -133,7 +148,7 @@ export const buildCommonRecord = (aggs, prev = {}) => {
 
 // helps to ensure that columns ending with All are the sum of
 // related cols ending with E, F, D
-const timeFinishedAll = t => ['E', 'F', 'D'].indexOf(t.Finished) !== -1;
+export const timeFinishedAll = t => ['E', 'F', 'D'].indexOf(t.Finished) !== -1;
 
 // just a silly helper for below.
 // col is an iteratee as passed to lodash functions
@@ -257,19 +272,6 @@ export const aggregateTimes = times => {
   };
 };
 
-export const filterTimes = times => {
-  // if we track the first and last index of the filtered times, it will
-  // look like there are gaps in our coverage. Therefore, times query
-  // should not filter by finished.
-  const firstIndex = times.length > 0 ? times[0].TimeIndex : null;
-  const lastIndex = times.length > 0 ? times[times.length - 1].TimeIndex : null;
-
-  // eslint-disable-next-line no-param-reassign
-  const filtered = times.filter(t => _.includes(['F', 'E', 'D'], t.Finished));
-
-  return [filtered, firstIndex, lastIndex];
-};
-
 // returned object has ids as keys, and values as null or
 // one of records.
 export const mapIds = (ids, records, recordIndex) => {
@@ -284,4 +286,36 @@ export const mapIds = (ids, records, recordIndex) => {
   });
 
   return ret;
+};
+
+export const getLargestTimeIndex = async () => {
+  const [results] = await sequelize.query(
+    'SELECT MAX(TimeIndex) last FROM time',
+  );
+
+  return results.length ? results[0].last : 0;
+};
+
+export const getTimesInInterval = async (minTimeIndex, limit) => {
+  const lastPossibleTimeIndex = +minTimeIndex + limit - 1;
+
+  const largest = await getLargestTimeIndex();
+
+  const moreTimesExist = lastPossibleTimeIndex < largest;
+
+  // do NOT use sequelize instances. Code later on (concerning Driven column)
+  // relies on this being raw data.
+  const [times] = await sequelize.query(
+    'SELECT * FROM time WHERE TimeIndex BETWEEN ? AND ? ORDER BY TimeIndex',
+    {
+      replacements: [minTimeIndex, lastPossibleTimeIndex],
+    },
+  );
+
+  const coverage = [
+    minTimeIndex,
+    moreTimesExist ? lastPossibleTimeIndex : largest,
+  ];
+
+  return [times, coverage, moreTimesExist];
 };

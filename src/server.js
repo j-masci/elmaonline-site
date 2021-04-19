@@ -66,17 +66,21 @@ app.use(async (req, res, next) => {
   // };
 
   res.on('finish', function() {
+    if (process.env.NODE_ENV === 'production') {
+      return;
+    }
+
     const t2 = new Date().getTime();
     const dt = t2 - t1;
     const print = [req.method, req.originalUrl, `${dt}ms`];
 
-    const dirs = req.originalUrl
-      .split('/')
-      .filter(part => part && part !== 'api');
+    // log ?
+    // const dirs = req.originalUrl
+    //   .split('/')
+    //   .filter(part => part && part !== 'api');
 
-    console.log(dirs);
-
-    console.log(...print);
+    // eslint-disable-next-line no-console
+    console.log(print);
   });
 
   next();

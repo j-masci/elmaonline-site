@@ -2,19 +2,22 @@ import fs from 'fs';
 import moment from 'moment';
 
 export function log(func, query, benchmark) {
-  const max = 1200;
+  if (process.env.NODE_ENV === 'DEVELOPEMENT') {
+    const max = 1200;
 
-  console.log(3333333, query.length, max);
-  if (query.length > max) {
-    console.log(
-      func,
-      `${benchmark}ms`,
-      'Truncated to',
-      max,
-      query.substring(0, max),
-    );
-  } else {
-    console.log(func, `${benchmark}ms`, query);
+    if (query.length > max) {
+      // eslint-disable-next-line no-console
+      console.log(
+        func,
+        `${benchmark}ms`,
+        'Truncated to',
+        max,
+        query.substring(0, max),
+      );
+    } else {
+      // eslint-disable-next-line no-console
+      console.log(func, `${benchmark}ms`, query);
+    }
   }
 
   let folder = './events/dblog/';

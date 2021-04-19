@@ -1,19 +1,7 @@
 import express from 'express';
 import sequelize from 'sequelize';
-import seq from 'data/sequelize';
-import moment from 'moment';
 import { authContext } from 'utils/auth';
-import * as _ from 'lodash'; // { mapValues, has, includes, values, groupBy } from 'lodash';
-import * as assert from 'assert';
-import {
-  Level,
-  Time,
-  Besttime,
-  LevelStats,
-  KuskiStats,
-  PlayStats,
-  LevelStatsUpdate,
-} from '../data/models';
+import { Level, Time } from '../data/models';
 
 const router = express.Router();
 
@@ -30,69 +18,6 @@ const attributes = [
   'Hidden',
   'Legacy',
 ];
-
-router.get('/temp', async (req, res) => {
-  const r = {};
-
-  // eslint-disable-next-line no-underscore-dangle
-  // const _times = await Time.findAll({
-  //   where: {},
-  //   order: [['TimeIndex', 'ASC']],
-  //   limit: [0, 100],
-  // });
-
-  const [_times] = await seq.query(
-    'select * from time order by TimeIndex ASC LIMIT 0, 1000000',
-  );
-
-  // r.fuck = _.map(_times, t => ({
-  //   fuck: t.Driven,
-  //   shit: moment(t.Driven).format('X'),
-  //   ass: parseInt(moment(t.Driven).format('X'), 10),
-  //   ass2: +moment(t.Driven).format('X'),
-  // }));
-
-  // eslint-disable-next-line no-unused-vars
-  const [timesFiltered, firstIndex, lastIndex] = PlayStats.filterTimes(_times);
-
-  const timesByLevel = _.groupBy(timesFiltered, 'LevelIndex');
-
-  const levelIds = Object.keys(timesByLevel);
-
-  // level indexes mapped to aggregate objects
-  const aggregatesByLevel = _.mapValues(timesByLevel, times => {
-    return PlayStats.aggregateTimes(times);
-  });
-
-  // ids mapped to LevelStats objects, or null
-  const levelStatsRecords = await LevelStats.mapIds(levelIds);
-
-  r.count = _.values(levelStatsRecords).length;
-  r.countEx = _.values(levelStatsRecords).filter(s => s !== null).length;
-  r.countNotEx = _.values(levelStatsRecords).filter(s => s === null).length;
-
-  // stats can be null
-  const updates = _.mapValues(levelStatsRecords, (levelStats, levelId) => {
-    const thisLevelsAggregates = aggregatesByLevel[levelId];
-
-    assert(thisLevelsAggregates !== undefined);
-
-    return LevelStats.buildRecord(thisLevelsAggregates, levelStats || null);
-  });
-
-  const updateOnDuplicateKeys = LevelStats.getColumns().filter(
-    key => !_.includes(['LevelStatsIndex', 'LevelIndex'], key),
-  );
-
-  r.dup = updateOnDuplicateKeys;
-  // r.updates = updates;
-
-  const updateResult = await LevelStats.bulkCreate(_.values(updates), {
-    updateOnDuplicate: updateOnDuplicateKeys,
-  });
-
-  res.json(r);
-});
 
 const getLevel = async LevelIndex => {
   const level = await Level.findOne({
