@@ -3,15 +3,17 @@ import Sequelize from 'sequelize';
 import sequelize from 'data/sequelize';
 import * as _ from 'lodash';
 import moment from 'moment';
+import { getOne, getCol } from 'utils/sequelize';
+import { strict as assert } from 'assert';
 
-// times longer than this are can be treated as this
+// times longer than this can be treated as this
 // instead, to deter ppl from inflating playtime on their levels.
 // todo: not implemented yet.
 const maxTimeSingleRun = 360000;
 
 export const timeCol = () => {
-  // INTEGER probably enough but i'm not willing to risk that i calculated
-  // that properly. Hence bigint.
+  // INTEGER seems large enough based on my calculations, but
+  // i'd rather not trust those.
   return {
     type: Sequelize.BIGINT,
     allowNull: false,
@@ -19,7 +21,8 @@ export const timeCol = () => {
   };
 };
 
-// # of attempts... won't be too large
+// generic integer column for counting things that aren't
+// incredibly large.
 export const attemptsCol = () => {
   return {
     type: Sequelize.INTEGER,
@@ -28,6 +31,10 @@ export const attemptsCol = () => {
   };
 };
 
+// column definitions likely shared between LevelStats
+// and KuskiStats (Kuski not implemented yet however).
+// LevelStatsDaily or KuskiLevelStats, if those ever become
+// a thing, may also use this.
 export const getCommonCols = () => ({
   TimeF: timeCol(),
   TimeD: timeCol(),
@@ -72,17 +79,22 @@ export const getCommonCols = () => ({
 });
 
 /**
+ * Build part of the record that will eventually get inserted
+ * or updated in the database. Indexes are database columns.
  *
- * @param aggs
+ * Specifies approximately (or exactly) columns in getCommonCols()
+ *
+ * @param {Object} aggs - returned object from aggregateTimes
  * @param {LevelStats|null} prev
- * @returns {{ThrottleTimeF: unknown, ThrottleTimeE: unknown, ThrottleTimeD: unknown, ApplesAll: unknown, MaxSpeedF: unknown, MaxSpeedE: unknown, MaxSpeedD: unknown, BrakeTimeF: unknown, TurnD: unknown, BrakeTimeE: unknown, RightVoltF: unknown, TimeAll: unknown, BrakeTimeD: unknown, RightVoltE: unknown, AttemptsE: unknown, AttemptsD: unknown, ThrottleTimeAll: unknown, BrakeTimeAll: unknown, ApplesD: unknown, ApplesE: unknown, RightVoltD: unknown, ApplesF: unknown, TurnE: unknown, TurnF: unknown, TimeD: unknown, TimeF: unknown, TimeE: unknown, AttemptsF: unknown, SuperVoltAll: unknown, LeftVoltAll: unknown, SuperVoltF: unknown, SuperVoltE: unknown, SuperVoltD: unknown, TurnAll: unknown, AttemptsAll: unknown, LeftVoltE: unknown, LeftVoltD: unknown, MaxSpeedAll: unknown, LeftVoltF: unknown, RightVoltAll: unknown}}
+ * @returns {Object}
  */
-export const buildCommonRecord = (aggs, prev) => {
+export const buildCommonUpdate = (aggs, prev) => {
+  // might convert null to empty object
   // eslint-disable-next-line no-param-reassign
   prev = prev || {};
 
   // indexes are database columns.
-  // values can be functions which takes (aggs, prev || {})
+  // values can be functions which take (aggs, prev || {})
   const cols = {
     // SUM
     TimeF: 'sum',
@@ -146,13 +158,12 @@ export const buildCommonRecord = (aggs, prev) => {
   });
 };
 
-// helps to ensure that columns ending with All are the sum of
-// related cols ending with E, F, D
+// true if t.Finished is E, F, or D.
+// columns ending in All are the sum of E, F, and D, which is not
+// the same as all runs in the time table.
 export const timeFinishedAll = t => ['E', 'F', 'D'].indexOf(t.Finished) !== -1;
 
-// just a silly helper for below.
-// col is an iteratee as passed to lodash functions
-// does lodash already provide this function ?
+// silly helper for below.
 const getter = (obj, key) => {
   if (typeof key === 'function') {
     return key(obj);
@@ -161,7 +172,7 @@ const getter = (obj, key) => {
   return obj[key];
 };
 
-// ie. "TimeF", "TimeE", "TimeD", "TimeAll"
+// helper for aggregating times
 const sumGroup = (times, base, col) => {
   // eslint-disable-next-line no-param-reassign
   col = col || base;
@@ -181,7 +192,7 @@ const sumGroup = (times, base, col) => {
   };
 };
 
-// ie. MaxSpeed
+// helper for aggregating times
 const maxGroup = (times, base, col) => {
   // eslint-disable-next-line no-param-reassign
   col = col || base;
@@ -207,40 +218,36 @@ const maxGroup = (times, base, col) => {
   };
 };
 
-export const getTopFinishes = (times, n) => {
-  // eslint-disable-next-line no-underscore-dangle
-  const _times = _.sortBy(
-    times.filter(t => t.Finished === 'F'),
-    t => +t.Time,
-  );
+// WARNING: see getTopFinished (you might want that instead)
+export const getTopTimes = (times, n) => {
+  // times driven earlier take precedence
+  const sorted = _.orderBy(times, ['Time', 'Driven'], ['ASC', 'ASC']);
 
-  return _times.reverse().slice(0, n);
+  return sorted.slice(0, n);
 };
 
-// convert datetime column to timestamp int
+export const getTopFinishes = (times, n) => {
+  // eslint-disable-next-line no-underscore-dangle
+
+  const finishes = times.filter(t => t.Finished === 'F');
+  return getTopTimes(finishes, n);
+};
+
+// convert time.Driven to unix timestamp
 const parseTimeDriven = d => parseInt(moment(d).format('X'), 10);
 
 // aggregate an array of rows from the time table.
-// DO NOT pass in model instances. These will have Driven columns
-// already converted to timestamp, which causes issues when we try to
-// do that again.
+// expects an array of plain old javascript objects,
+// where time.Driven is a timestamp.
 export const aggregateTimes = times => {
   return {
-    Count: times.length,
-    First: times[0],
     // useful if/when all times have the same kuski or level index.
     // it is up to the caller of this function to know if that's the case.
     LevelIndex: times.length && times[0].LevelIndex,
     KuskiIndex: times.length && times[0].KuskiIndex,
 
-    // slow. if/when generating kuski stats, it would be a good idea to make this
-    // optional (since it will not be useful data at that time)
-    topTimes: getTopFinishes(times, 10),
-
     // timestamp
-    LastDriven: _.maxBy(
-      times.map(t => (timeFinishedAll(t) ? parseTimeDriven(t.Driven) : 0)),
-    ),
+    LastDriven: _.maxBy(times, 'Driven'),
 
     // SUM
     ...sumGroup(times, 'Time'),
@@ -262,19 +269,11 @@ export const aggregateTimes = times => {
 
     BattleTopTime: null,
     BattleTopKuski: null,
-    LeadersCount: 0,
-    Kuski1Index: null,
-    Kuski1Time: null,
-    Kuski2Index: null,
-    Kuski2Time: null,
-    Kuski3Index: null,
-    Kuski3Time: null,
   };
 };
 
-// returned object has ids as keys, and values as null or
-// one of records.
-export const mapIds = (ids, records, recordIndex) => {
+// returns an object with ids as keys, and one of records, or null, as values.
+export const mapIdsToRecordsOrNull = (ids, records, recordIndex) => {
   const ret = {};
 
   ids.forEach(id => {
@@ -288,34 +287,57 @@ export const mapIds = (ids, records, recordIndex) => {
   return ret;
 };
 
-export const getLargestTimeIndex = async () => {
-  const [results] = await sequelize.query(
-    'SELECT MAX(TimeIndex) last FROM time',
-  );
+export const getMaxTimeIndex = async () =>
+  getCol('SELECT MAX(TimeIndex) maxIndex FROM time', {}, 'maxIndex');
 
-  return results.length ? results[0].last : 0;
-};
-
-export const getTimesInInterval = async (minTimeIndex, limit) => {
+// returns an array of plain old javascript objects.
+// queries all times from the min up to min + limit,
+// and tells you the last time index that exists within
+// that range (in case it hits the end of the table).
+// optionally filters out times by finished and can map
+// the Driven column to a timestamp.
+export const getTimesInInterval = async (
+  minTimeIndex,
+  limit,
+  filterFinished = true,
+  mapDriven = true,
+) => {
   const lastPossibleTimeIndex = +minTimeIndex + limit - 1;
 
-  const largest = await getLargestTimeIndex();
+  const largest = await getMaxTimeIndex();
 
   const moreTimesExist = lastPossibleTimeIndex < largest;
 
-  // do NOT use sequelize instances. Code later on (concerning Driven column)
-  // relies on this being raw data.
-  const [times] = await sequelize.query(
+  // no where clause here. Will screw up coverage.
+  let [times] = await sequelize.query(
     'SELECT * FROM time WHERE TimeIndex BETWEEN ? AND ? ORDER BY TimeIndex',
     {
       replacements: [minTimeIndex, lastPossibleTimeIndex],
     },
   );
 
+  // ie. min 175000000, limit 1000000
+  // coverage could be [175000000, 175396482]
+  // if only 396482 times exist beyond 175000000.
   const coverage = [
     minTimeIndex,
     moreTimesExist ? lastPossibleTimeIndex : largest,
   ];
+
+  // we often don't care about other finish types
+  if (filterFinished) {
+    times = times.filter(timeFinishedAll);
+  }
+
+  // best to map to timestamp once, as we'll need the timestamp
+  // more than once overall in most cases.
+  if (mapDriven) {
+    times = times.map(t => {
+      // eslint-disable-next-line no-param-reassign
+      t.Driven = parseTimeDriven(t.Driven);
+      return t;
+    });
+  }
 
   return [times, coverage, moreTimesExist];
 };

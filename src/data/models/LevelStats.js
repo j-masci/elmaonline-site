@@ -3,10 +3,22 @@ import * as _ from 'lodash';
 import { strict as assert } from 'assert';
 import * as Ps from './PlayStats';
 import sequelize from '../sequelize';
-import { PlayStats } from './index';
+import { getTopFinishes } from './PlayStats';
 
 // store this many top times.
 const topXTimes = 10;
+
+// an array of arrays.
+// if you slice and flatten, you'll get a one dimensional array of
+// specified length. (eg. usage: query level stats with only top 3 times)
+export const topXTimesColumns = _.range(0, topXTimes).map(i => {
+  return [
+    `TopKuskiIndex${i}`,
+    `TopTime${i}`,
+    `TopTimeIndex${i}`,
+    `TopDriven${i}`,
+  ];
+});
 
 export const ddl = {
   LevelStatsIndex: {
@@ -27,98 +39,156 @@ export const ddl = {
   },
   // BattleTopTime: timeCol(),
   // BattleTopKuski: timeCol(),
-  // KuskiIndex0, KuskiTime0, KuskiIndex1, KuskiTime1, etc.
-  ...(() => {
-    const ret = {};
 
-    // 0 to 9
-    _.range(0, topXTimes).forEach(i => {
-      ret[`KuskiIndex${i}`] = {
+  // ie. TopKuskiIndex0, TopTime0 ... TopTimeIndex9, TopDriven9
+  // 40 columns
+  ..._.flatten(
+    _.range(0, topXTimes).map(x => ({
+      [`TopKuskiIndex${x}`]: {
         type: Seq.INTEGER,
         allowNull: true,
-      };
-
-      ret[`KuskiTime${i}`] = {
+      },
+      [`TopTime${x}`]: {
         type: Seq.INTEGER,
         allowNull: true,
-      };
-    });
+      },
+      [`TopTimeIndex${x}`]: {
+        type: Seq.INTEGER,
+        allowNull: true,
+      },
+      [`TopDriven${x}`]: {
+        type: Seq.INTEGER,
+        allowNull: true,
+      },
+    })),
+  ),
 
-    return ret;
-  })(),
-  // this allows us to validate level stats by comparing
-  // with the time table up to this point. We cannot do this
-  // with the levelStatsUpdate data alone because not all
-  // levelStats get updated in a single batch.
+  BattleTopTime: {},
+  BattleTopKuskiIndex: {},
+
+  // level stats should agree with the time table starting
+  // from TimeIndex 1 up until this point.
   LastPossibleTimeIndex: {
     type: Seq.INTEGER,
     allowNull: false,
     defaultValue: 0,
   },
+
+  // virtual column returning an array of objects.
+  // it's much easier to work with top times like this and this
+  // should probably be passed to the front-end whenever possible.
+  TopXTimes: {
+    type: Seq.VIRTUAL,
+    get() {
+      return _.range(0, topXTimes).map(i => {
+        // must have same indexes as times table, or code elsewhere will break.
+        return {
+          KuskiIndex: this.getDataValue(`TopKuskiIndex${i}`),
+          Time: this.getDataValue(`TopTime${i}`),
+          TimeIndex: this.getDataValue(`TopTimeIndex${i}`),
+          Driven: this.getDataValue(`TopDriven${i}`),
+        };
+      });
+    },
+  },
 };
 
+// Array<string>
+const cols = Object.keys(_.filterBy(ddl, col => col.type !== Seq.VIRTUAL));
+
 class LevelStats extends Model {
-  // returns an array of objects representing the top times
-  // for the level. The size of the array is limited by the number
-  // of top times, which could be less than 10, and even 0.
-  getTopTimes = () => {
-    const ret = _.range(0, topXTimes).map(i => {
-      const Time = this.getDataValue(`KuskiTime${i}`);
-      const KuskiIndex = this.getDataValue(`KuskiIndex${i}`);
-
-      return Time && Time > 0
-        ? {
-            Time,
-            KuskiIndex,
-          }
-        : null;
-    });
-
-    return ret.filter(v => v !== null);
-  };
-
-  // ie. add aggregates to an existing database row or null
   /**
-   *
-   * @param {array} aggs
+   * @param {Array<Object>} times
    * @param {LevelStats|null} prev
-   * @returns {{}}
+   * @returns {Object} - columns, ready for database update
    */
-  static buildRecord = (aggs, prev) => {
-    // most columns
-    const record = Ps.buildCommonRecord(aggs, prev);
+  static buildUpdate = (times, prev) => {
+    assert(prev === null || _.isObjectLike(prev), `bad type: ${typeof ex}`);
 
-    let exTopTimes;
+    const aggs = Ps.aggregateTimes(times, prev);
 
+    let update = Ps.buildCommonUpdate(aggs, prev);
+
+    // necessary for upsert later on
     if (prev !== null) {
-      record.LevelStatsIndex = prev.LevelStatsIndex;
-      assert(prev.LevelIndex === aggs.LevelIndex);
-      record.LevelIndex = aggs.LevelIndex;
-      exTopTimes = prev.getTopTimes();
-
-      if (aggs.LastDriven > prev.LastDriven) {
-        record.LastDriven = aggs.LastDriven;
-      }
-    } else {
-      exTopTimes = [];
-      record.LastDriven = aggs.LastDriven;
-      record.LevelIndex = aggs.LevelIndex;
+      update.LevelStatsIndex = prev.LevelStatsIndex;
     }
 
-    const allTopTimes = exTopTimes.concat(aggs.topTimes);
+    update = Object.assign(update, {
+      LevelIndex: prev !== null ? prev.LevelIndex : aggs.LevelIndex,
+      LastDriven: (() => {
+        if (prev !== null) {
+          return aggs.LastDriven > prev.LastDriven
+            ? aggs.LastDriven
+            : prev.LastDriven;
+        }
 
-    const newTopTimes = _.sortBy(allTopTimes, 'Time').slice(0, topXTimes);
+        return aggs.LastDriven;
+      })(),
+      LeadersCount: (() => {
+        const p = prev || {};
+
+        let currentBest = {
+          Time: (p && p.TopTime0) || 9999999999,
+          Driven: (p && p.TopDriven0) || 0,
+        };
+
+        let count = 0;
+
+        times.forEach(t => {
+          let best = false;
+
+          if (t.Finished === 'F') {
+            if (t.Time < currentBest.Time) {
+              best = true;
+            } else if (
+              t.Time === currentBest.Time &&
+              t.Driven < currentBest.Driven
+            ) {
+              // this can occur when time are imported to time table with a
+              // driven date some time in the past.
+              best = true;
+            }
+          }
+
+          if (best) {
+            count += 1;
+
+            currentBest = {
+              Time: t.Time,
+              Driven: t.Driven,
+            };
+          }
+
+          const prevCount = p ? p.LeadersCount : 0;
+          return count + prevCount;
+        });
+      })(),
+    });
+
+    const prevTopTimes = prev !== null ? prev.TopXTimes : [];
+
+    const newTopTimes = Ps.getTopTimes(
+      prevTopTimes.concat(Ps.getTopFinishes(times, topXTimes)),
+      topXTimes,
+    );
 
     // Top X times
     _.range(0, topXTimes).forEach(i => {
-      record[`KuskiIndex${i}`] = newTopTimes[i]
-        ? newTopTimes[i].KuskiIndex
-        : null;
-
-      record[`KuskiTime${i}`] = newTopTimes[i] ? newTopTimes[i].Time : null;
+      if (newTopTimes[i].TimeIndex) {
+        update[`TopKuskiIndex${i}`] = newTopTimes[i].KuskiIndex;
+        update[`TopTime${i}`] = newTopTimes[i].TopTime;
+        update[`TopTimeIndex${i}`] = newTopTimes[i].TopTimeIndex;
+        update[`TopDriven${i}`] = newTopTimes[i].TopDriven;
+      } else {
+        update[`TopKuskiIndex${i}`] = null;
+        update[`TopTime${i}`] = null;
+        update[`TopTimeIndex${i}`] = null;
+        update[`TopDriven${i}`] = null;
+      }
     });
 
-    return record;
+    return update;
   };
 
   // map an array of ids to existing instances or null
@@ -130,41 +200,38 @@ class LevelStats extends Model {
       },
     });
 
-    return Ps.mapIds(levelIds, records, 'LevelIndex');
+    return Ps.mapIdsToRecordsOrNull(levelIds, records, 'LevelIndex');
   };
 
+  // useful for using .bulkCreate() to upsert
   static getUpdateOnDuplicateKeys = () => {
-    return Object.keys(ddl).filter(
+    return cols.filter(
       key => !_.includes(['LevelStatsIndex', 'LevelIndex'], key),
     );
   };
 
   // converts time table records to an array of updates that need to be made
-  // to the levelStats table.
-  static processTimes = async (times, lastPossibleTimeIndex) => {
+  // to the levelStats table. Times are an array of plain old javascript objects
+  // and most likely do not share the same level (they might be all the times
+  // driven since the last bulk update)
+  static buildUpdatesFromTimes = async (times, lastPossibleTimeIndex) => {
     const timesByLevel = _.groupBy(times, 'LevelIndex');
 
     // ids mapped to LevelStats objects, or null
     const exLevelStats = await LevelStats.mapIds(Object.keys(timesByLevel));
 
-    // level indexes mapped to aggregate objects
-    const updates = _.mapValues(timesByLevel, (levelTimes, LevelIndex) => {
-      const aggs = PlayStats.aggregateTimes(levelTimes);
+    const updates = _.values(
+      _.mapValues(timesByLevel, (levelTimes, LevelIndex) => {
+        const prev = exLevelStats[LevelIndex];
 
-      const ex = exLevelStats[LevelIndex];
-      assert(
-        ex === null || _.isObjectLike(ex),
-        `Expected null or a LevelStats instance, got ${typeof ex}`,
-      );
+        return {
+          ...LevelStats.buildUpdate(levelTimes, prev),
+          LastPossibleTimeIndex: +lastPossibleTimeIndex,
+        };
+      }),
+    );
 
-      const record = LevelStats.buildRecord(aggs, ex);
-
-      record.lastPossibleTimeIndex = +lastPossibleTimeIndex;
-
-      return record;
-    });
-
-    return [_.values(updates), exLevelStats];
+    return [updates, exLevelStats];
   };
 }
 

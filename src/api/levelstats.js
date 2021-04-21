@@ -23,6 +23,8 @@ const doNext = async limit => {
   const [_times, coverage, moreTimesExist] = await Ps.getTimesInInterval(
     TimeIndex0,
     limit,
+    true,
+    true,
   );
 
   track('after_get_times');
@@ -38,7 +40,7 @@ const doNext = async limit => {
     // get transaction
     transaction = await sequelize.transaction();
 
-    const [updates, levelStats] = await LevelStats.processTimes(
+    const [updates, levelStats] = await LevelStats.buildUpdatesFromTimes(
       times,
       coverage[1],
     );
@@ -72,11 +74,10 @@ const doNext = async limit => {
 
     track('after_commit');
 
-    await levelStatsUpdate.updateAndSaveDebug(d => {
+    await levelStatsUpdate.updateDebug(prevValue => {
       // eslint-disable-next-line no-param-reassign
-      d.perf = track(null);
-      return d;
-    });
+      prevValue.perf = track(null);
+    }, true);
 
     return levelStatsUpdate;
   } catch (err) {
