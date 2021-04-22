@@ -20,19 +20,14 @@ const doNext = async limit => {
 
   const TimeIndex0 = last + 1;
 
-  const [_times, coverage, moreTimesExist] = await Ps.getTimesInInterval(
+  const [times, coverage, moreTimesExist] = await Ps.getTimesInInterval(
     TimeIndex0,
     limit,
     true,
     true,
   );
 
-  track('after_get_times');
-
-  // Finished F, E, or D
-  const times = _times.filter(Ps.timeFinishedAll);
-
-  track('after_filter_times');
+  track('get_times');
 
   let transaction;
 
@@ -40,30 +35,33 @@ const doNext = async limit => {
     // get transaction
     transaction = await sequelize.transaction();
 
-    const [updates, levelStats] = await LevelStats.buildUpdatesFromTimes(
-      times,
-      coverage[1],
-    );
+    const [
+      updates,
+      levelStats,
+      buildUpdatesPerf,
+    ] = await LevelStats.buildUpdatesFromTimes(times, coverage[1]);
 
-    track('after_process_times');
+    track('build_updates');
 
     await LevelStats.bulkCreate(updates, {
       transaction,
       updateOnDuplicate: LevelStats.getUpdateOnDuplicateKeys(),
     });
 
-    track('after_update_levelStats');
+    track('bulk_upsert');
 
     const levelStatsUpdate = await LevelStatsUpdate.create({
       TimeIndex0: coverage[0], // same as TimeIndex0
       TimeIndex1: coverage[1],
       TimeStart: moment().unix(),
       Debug: JSON.stringify({
-        limit,
         moreTimesExist,
-        count: Object.keys(levelStats).length,
-        countEx: _.values(levelStats).filter(l => l !== null).length,
-        countNotEx: _.values(levelStats).filter(l => l === null).length,
+        maxPossibleCountTimes: limit,
+        actualCountTimes: times.length,
+        countLevels: Object.keys(levelStats).length,
+        countExLevels: _.values(levelStats).filter(l => l !== null).length,
+        countNotExLevels: _.values(levelStats).filter(l => l === null).length,
+        buildUpdatesPerf,
         // useful? Idk
         // levelIds: Object.keys(levelStats).map(k => +k),
       }),
@@ -74,6 +72,7 @@ const doNext = async limit => {
 
     track('after_commit');
 
+    // add performance tracker (after commit)
     await levelStatsUpdate.updateDebug(prevValue => {
       // eslint-disable-next-line no-param-reassign
       prevValue.perf = track(null);
@@ -81,7 +80,16 @@ const doNext = async limit => {
 
     return levelStatsUpdate;
   } catch (err) {
-    await transaction.rollback();
+    // catch exceptions thrown after the commit. If we commit and rollback,
+    // we'll get a "Transaction cannot be rolled back because it has
+    // been finished with state: commit" error. So catch and ignore
+    // that, and then throw the original exception that caused it.
+    try {
+      await transaction.rollback();
+    } catch (err2) {
+      throw err;
+    }
+
     throw err;
   }
 };

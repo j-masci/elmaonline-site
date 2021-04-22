@@ -1,10 +1,13 @@
-// a playStats module which holds common functionality used in both LevelStats and KuskiStats models.
+// Reusable functions for different playStats modules (many of which
+// do not exist yet and may never exist). ie. LevelStats, KuskiStats,
+// LevelStatsDaily, KuskiLevelStats
 import Sequelize from 'sequelize';
 import sequelize from 'data/sequelize';
 import * as _ from 'lodash';
 import moment from 'moment';
 import { getOne, getCol } from 'utils/sequelize';
 import { strict as assert } from 'assert';
+import Seq from 'sequelize';
 
 // times longer than this can be treated as this
 // instead, to deter ppl from inflating playtime on their levels.
@@ -76,6 +79,23 @@ export const getCommonCols = () => ({
   TurnD: attemptsCol(),
   TurnE: attemptsCol(),
   TurnAll: attemptsCol(),
+  // unix timestamps
+  LastDrivenF: {
+    type: Seq.INTEGER(),
+    allowNull: true,
+  },
+  LastDrivenE: {
+    type: Seq.INTEGER(),
+    allowNull: true,
+  },
+  LastDrivenD: {
+    type: Seq.INTEGER(),
+    allowNull: true,
+  },
+  LastDrivenAll: {
+    type: Seq.INTEGER(),
+    allowNull: true,
+  },
 });
 
 /**
@@ -139,6 +159,10 @@ export const buildCommonUpdate = (aggs, prev) => {
     MaxSpeedD: 'max',
     MaxSpeedE: 'max',
     MaxSpeedAll: 'max',
+    LastDrivenF: 'max',
+    LastDrivenE: 'max',
+    LastDrivenD: 'max',
+    LastDrivenAll: 'max',
   };
 
   return _.mapValues(cols, (value, index) => {
@@ -197,40 +221,29 @@ const maxGroup = (times, base, col) => {
   // eslint-disable-next-line no-param-reassign
   col = col || base;
 
-  // because _.maxBy returns the entire object
-  const maxBy = iteratee => {
-    return getter(_.maxBy(times, iteratee), iteratee);
+  const getMaxFromTimes = (iteratee, fromObj) => {
+    const maxTimeObject = _.maxBy(times, iteratee);
+
+    return maxTimeObject[fromObj];
   };
 
   return {
-    [`${base}F`]: maxBy(time =>
-      time.Finished === 'F' ? getter(time, col) : 0,
+    [`${base}F`]: getMaxFromTimes(
+      time => (time.Finished === 'F' ? getter(time, col) : 0),
+      col,
     ),
-    [`${base}E`]: maxBy(time =>
-      time.Finished === 'E' ? getter(time, col) : 0,
+    [`${base}E`]: getMaxFromTimes(
+      time => (time.Finished === 'E' ? getter(time, col) : 0),
+      col,
     ),
-    [`${base}D`]: maxBy(time =>
-      time.Finished === 'D' ? getter(time, col) : 0,
+    [`${base}D`]: getMaxFromTimes(
+      time => (time.Finished === 'D' ? getter(time, col) : 0),
+      col,
     ),
-    [`${base}All`]: maxBy(time =>
-      timeFinishedAll(time) ? getter(time, col) : 0,
-    ),
+    [`${base}All`]: getMaxFromTimes(time => {
+      return timeFinishedAll(time) ? getter(time, col) : 0;
+    }, col),
   };
-};
-
-// WARNING: see getTopFinished (you might want that instead)
-export const getTopTimes = (times, n) => {
-  // times driven earlier take precedence
-  const sorted = _.orderBy(times, ['Time', 'Driven'], ['ASC', 'ASC']);
-
-  return sorted.slice(0, n);
-};
-
-export const getTopFinishes = (times, n) => {
-  // eslint-disable-next-line no-underscore-dangle
-
-  const finishes = times.filter(t => t.Finished === 'F');
-  return getTopTimes(finishes, n);
 };
 
 // convert time.Driven to unix timestamp
@@ -246,9 +259,6 @@ export const aggregateTimes = times => {
     LevelIndex: times.length && times[0].LevelIndex,
     KuskiIndex: times.length && times[0].KuskiIndex,
 
-    // timestamp
-    LastDriven: _.maxBy(times, 'Driven'),
-
     // SUM
     ...sumGroup(times, 'Time'),
     ...sumGroup(times, 'Apples'),
@@ -259,6 +269,7 @@ export const aggregateTimes = times => {
     ...sumGroup(times, 'SuperVolt'),
     ...sumGroup(times, 'Turn'),
 
+    // almost like a sumGroup but not quite
     AttemptsF: _.sumBy(times, t => (t.Finished === 'F' ? 1 : 0)),
     AttemptsE: _.sumBy(times, t => (t.Finished === 'E' ? 1 : 0)),
     AttemptsD: _.sumBy(times, t => (t.Finished === 'D' ? 1 : 0)),
@@ -266,9 +277,7 @@ export const aggregateTimes = times => {
 
     // MAX
     ...maxGroup(times, 'MaxSpeed'),
-
-    BattleTopTime: null,
-    BattleTopKuski: null,
+    ...maxGroup(times, 'LastDriven', 'Driven'),
   };
 };
 
@@ -340,4 +349,148 @@ export const getTimesInInterval = async (
   }
 
   return [times, coverage, moreTimesExist];
+};
+
+/**
+ * Warning: you might want getTopFinishes instead.
+ *
+ * expects t.Driven to be unix timestamp.
+ *
+ * @param {Array<Object>} times
+ * @param {integer} n
+ * @returns {Array<Object>}
+ */
+export const getTopTimes = (times, n) => {
+  // times driven earlier take precedence
+  const sorted = _.orderBy(times, ['Time', 'Driven'], ['ASC', 'ASC']);
+
+  return sorted.slice(0, n);
+};
+
+/**
+ * expects t.Driven to be unix timestamp.
+ *
+ * @param {Array<Object>} times
+ * @param {integer} n
+ * @returns {Array<Object>}
+ */
+export const getTopFinishes = (times, n) => {
+  // eslint-disable-next-line no-underscore-dangle
+
+  const finishes = times.filter(t => t.Finished === 'F');
+  return getTopTimes(finishes, n);
+};
+
+/**
+ * expects t.Driven to be unix timestamp.
+ *
+ * @param {Array<Object>}times
+ * @param {Array} prev
+ * @param count
+ * @returns {Array<Object>} - has length of count or less.
+ */
+export const mergeTopTimes = (times, prev, count) => {
+  assert(prev === null || _.isObjectLike(prev), `bad type: ${typeof prev}`);
+
+  const finishes = times.filter(t => t.Finished === 'F');
+
+  // top X finishes from times.
+  const batchTopXTimes = getTopTimes(finishes, count);
+
+  // 0 to 10 top times previously stored in DB, an array of
+  // objects with only 4 values each.
+  const prevTopTimes =
+    prev === null ? [] : prev.TopXTimes.filter(t => t.TimeIndex > 0);
+
+  return getTopTimes(batchTopXTimes.concat(prevTopTimes), count);
+};
+
+/**
+ * expects t.Driven to be unix timestamp.
+ *
+ * @param {Array<Object>}times
+ * @param {Array} prev
+ * @returns {Array<Object>}
+ */
+export const mergeLeaderHistory = (times, prev) => {
+  assert(prev === null || _.isObjectLike(prev), `bad type: ${typeof prev}`);
+
+  const newFinished = times.filter(t => t.Finished === 'F');
+
+  // times from old leaders and all new times finished in one array.
+  // note that old leaders are objects with entries, unlike new times.
+  const all = newFinished.concat(prev ? prev.LeaderHistory : []);
+
+  // order by driven date then time, then each time we reach a better Time,
+  // it will be the WR time. (not the one after it if the Time is tied)
+  const ordered = _.orderBy(all, ['Driven', 'Time'], ['ASC', 'ASC']);
+
+  let best = 9999999999;
+  const leaders = [];
+
+  ordered.forEach(ord => {
+    if (ord.Time < best) {
+      leaders.push(ord);
+      best = ord.Time;
+    }
+  });
+
+  return leaders.map(t => ({
+    Time: t.Time,
+    KuskiIndex: t.KuskiIndex,
+    TimeIndex: t.TimeIndex,
+    Driven: t.Driven,
+  }));
+};
+
+/**
+ * @param {Array<Object>} times
+ * @param {LevelStats|null} prev
+ * @returns {{BattleTopDriven: null|int, BattleTopKuskiIndex: null|int, BattleTopTime: null|int, BattleTopTimeIndex: null|int, BattleTopBattleIndex: null|int}|null}
+ */
+export const mergeBattleWinner = (times, prev) => {
+  assert(prev === null || _.isObjectLike(prev), `bad type: ${typeof prev}`);
+
+  const battleTimesFinished = times.filter(
+    t => t.Finished === 'F' && t.BattleIndex !== null && t.BattleIndex > 0,
+  );
+
+  const topBattleTime = getTopTimes(battleTimesFinished, 1)[0] || null;
+
+  const fromPrev = {
+    BattleTopTime: prev === null ? null : prev.BattleTopTime,
+    BattleTopTimeIndex: prev === null ? null : prev.BattleTopTimeIndex,
+    BattleTopKuskiIndex: prev === null ? null : prev.BattleTopKuskiIndex,
+    BattleTopDriven: prev === null ? null : prev.BattleTopDriven,
+    BattleTopBattleIndex: prev === null ? null : prev.BattleTopBattleIndex,
+  };
+
+  const fromTimes = {
+    BattleTopTime: topBattleTime === null ? null : topBattleTime.Time,
+    BattleTopTimeIndex: topBattleTime === null ? null : topBattleTime.TimeIndex,
+    BattleTopKuskiIndex:
+      topBattleTime === null ? null : topBattleTime.KuskiIndex,
+    BattleTopDriven: topBattleTime === null ? null : topBattleTime.Driven,
+    BattleTopBattleIndex:
+      topBattleTime === null ? null : topBattleTime.BattleIndex,
+  };
+
+  // if no previous entry, use battle winner (which could all null values)
+  if (prev === null) {
+    return fromTimes;
+  }
+
+  // if no battle winner, use what was there before. (which could all null values)
+  if (topBattleTime === null) {
+    return fromPrev;
+  }
+
+  // even though prev was not null, the value on fromPrev still can be
+  // (when a levelStats entry exists but without any top battle time.)
+  if (fromTimes.BattleTopTime < (fromPrev.BattleTopTime || 99999999)) {
+    return fromTimes;
+  }
+
+  // the previous winner and times (non null) (no change to db)
+  return fromPrev;
 };

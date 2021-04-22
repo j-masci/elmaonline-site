@@ -1,10 +1,8 @@
-import sequelize from 'data/sequelize';
-
-const { query } = sequelize;
+import sequelize from '../data/sequelize';
 
 // get the first row of a select query, or a default value.
 export const getOne = async (sql, opts, df = null) => {
-  const [results] = query(sql, opts);
+  const [results] = await sequelize.query(sql, opts || {});
 
   return results.length > 0 ? results[0] : df;
 };
@@ -14,31 +12,54 @@ export const getOne = async (sql, opts, df = null) => {
 // returns undefined. In some cases, undefined indicates an
 // error on your part.
 export const getCol = async (sql, opts, column) => {
-  const first = getOne(sql, opts, null);
+  const first = await getOne(sql, opts, null);
 
   return first ? first[column] : undefined;
 };
 
-// returns a function that updates a JSON column on your model and
-// optionally calls save. The callable that you pass to it receives and
-// returns an object. If your column has custom getters/setters defined
-// in your model, those are bypassed.
-export const getJsonUpdater = col => async (callable, save = true) => {
+/**
+ * Tried this with some higher order function stuff but it seemed
+ * the "this" did not get bound properly on calling.
+ *
+ * This version is more verbose but probably also a lot easier
+ * to understand.
+ *
+ * You can call this inside a method on a sequelize instance, and
+ * pass the instance as the first parameter.
+ *
+ * It gets the column, JSON parses it, calls your callable on that
+ * object/array, updates the instance, and then optionally calls
+ * save on the instance.
+ *
+ * The callable can return the object/array after mutating, or just
+ * mutate it and return undefined (or have no return value). (of course,
+ * it can also return a new object/array).
+ *
+ * @param self
+ * @param col
+ * @param callable
+ * @param save
+ * @param df
+ * @returns {any}
+ * @constructor
+ */
+export const JsonUpdate = (self, col, callable, save, df = {}) => {
   // bypass get/set methods in model definition, if any
-  const stringVal = this.dataValues[col];
-  let value = stringVal ? JSON.parse(stringVal) : {};
+  const stringVal = self.dataValues[col];
+  let value = stringVal ? JSON.parse(stringVal) : df;
 
-  // the callable can return an object or mutate the object/array
-  // directly and return nothing.
   const ret = callable(value);
 
   if (ret !== undefined) {
     value = ret;
   }
 
-  this.dataValues[col] = JSON.stringify(value);
+  // eslint-disable-next-line no-param-reassign
+  self.dataValues[col] = JSON.stringify(value);
 
   if (save) {
-    this.save();
+    self.save();
   }
+
+  return value;
 };

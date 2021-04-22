@@ -1,8 +1,6 @@
 import Seq, { Model } from 'sequelize';
 import sequelize from 'data/sequelize';
-import * as _ from 'lodash';
-import * as Ps from './PlayStats';
-import { getJsonUpdater, getCol } from '../../utils/sequelize';
+import { JsonUpdate, getCol } from '../../utils/sequelize';
 
 export const ddl = {
   LevelStatsUpdateIndex: {
@@ -29,20 +27,14 @@ export const ddl = {
   // JSON
   Debug: {
     type: Seq.TEXT('long'),
-    // not turning on because not tested and not needed atm.
-    // probably works fine however.
-    // get() {
-    //   return JSON.parse(this.getDataValue('Debug'));
-    // },
-    // set(value) {
-    //   this.setDataValue('Debug', JSON.stringify(value));
-    // },
   },
 };
 
 class LevelStatsUpdate extends Model {
   // ie. this.updateDebug(prev => { prev.newValue = 23 }, save = true)
-  updateDebug = getJsonUpdater('Debug');
+  updateDebug = (callable, save) => {
+    return JsonUpdate(this, 'Debug', callable, save);
+  };
 
   static getLastTimeIndexProcessed = async () =>
     getCol(
